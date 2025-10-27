@@ -2,51 +2,125 @@
 <html>
 <head>
   <title>XIAO IMU Data</title>
+  <style>
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: grid;
+      place-content: center;
+      text-align: center;
+      background-color: #f0f0f0;
+      color: #333;
+    }
+    #connectButton {
+      font-size: 1.2em;
+      padding: 10px 20px;
+      border-radius: 8px;
+      border: none;
+      background-color: #007bff;
+      color: white;
+      cursor: pointer;
+      margin-bottom: 20px;
+    }
+    .data-container {
+      display: flex;
+      gap: 20px;
+    }
+    .data-section { 
+      background-color: white;
+      border: 1px solid #ccc; 
+      padding: 10px 20px; 
+      margin-top: 20px; 
+      border-radius: 8px; 
+      min-width: 200px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    p {
+      font-size: 1.1em;
+      margin: 10px 0;
+    }
+  </style>
 </head>
 <body>
   <h1>XIAO IMU Data</h1>
   <button id="connectButton">Connect to XIAO</button>
-  <div id="imuData"></div>
+  
+  <div class="data-container">
+    <div id="accelerometerData"></div>
+    <div id="gyroscopeData"></div>
+  </div>
 
   <script>
     const connectButton = document.getElementById('connectButton');
-    const imuDataContainer = document.getElementById('imuData');
+    const accelContainer = document.getElementById('accelerometerData');
+    const gyroContainer = document.getElementById('gyroscopeData');
+
+    // Objects to store the latest data for each sensor
+    let latestAccel = { x: 0, y: 0, z: 0 };
+    let latestGyro = { x: 0, y: 0, z: 0 };
+
+    // Function to update the display with the latest known data
+    function updateDisplay() {
+      accelContainer.innerHTML = `
+        <div class="data-section">
+          <h2>Accelerometer</h2>
+          <p>X: ${latestAccel.x.toFixed(2)}</p>
+          <p>Y: ${latestAccel.y.toFixed(2)}</p>
+          <p>Z: ${latestAccel.z.toFixed(2)}</p>
+        </div>
+      `;
+      gyroContainer.innerHTML = `
+        <div class="data-section">
+          <h2>Gyroscope</h2>
+          <p>X: ${latestGyro.x.toFixed(2)}</p>
+          <p>Y: ${latestGyro.y.toFixed(2)}</p>
+          <p>Z: ${latestGyro.z.toFixed(2)}</p>
+        </div>
+      `;
+    }
 
     connectButton.addEventListener('click', () => {
       navigator.bluetooth.requestDevice({
         filters: [{ name: 'XIAO_IMU' }],
         optionalServices: ['19b10000-e8f2-537e-4f6c-d104768a1214']
       })
-      .then(device => {
-        return device.gatt.connect();
-      })
-      .then(server => {
-        return server.getPrimaryService('19b10000-e8f2-537e-4f6c-d104768a1214');
-      })
-      .then(service => {
-        return service.getCharacteristic('19b10001-e8f2-537e-4f6c-d104768a1214');
-      })
+      .then(device => device.gatt.connect())
+      .then(server => server.getPrimaryService('19b10000-e8f2-537e-4f6c-d104768a1214'))
+      .then(service => service.getCharacteristic('19b10001-e8f2-537e-4f6c-d104768a1214'))
       .then(characteristic => {
         characteristic.startNotifications();
         characteristic.addEventListener('characteristicvaluechanged', handleCharacteristicValueChanged);
+        connectButton.textContent = "Connected";
+        connectButton.disabled = true;
       })
-      .catch(error => {
-        console.error(error);
-      });
+      .catch(error => console.error('Connection failed:', error));
     });
 
     function handleCharacteristicValueChanged(event) {
       const value = event.target.value;
       const decoder = new TextDecoder('utf-8');
-      const imuDataString = decoder.decode(value);
-      const imuDataArray = imuDataString.split(',');
+      const dataString = decoder.decode(value);
+      const dataArray = dataString.split(',');
 
-      imuDataContainer.innerHTML = `
-        <p>X: ${imuDataArray[0]}</p>
-        <p>Y: ${imuDataArray[1]}</p>
-        <p>Z: ${imuDataArray[2]}</p>
-      `;
+      const identifier = dataArray[0];
+
+      if (identifier === 'A' && dataArray.length === 4) {
+        // It's accelerometer data, update the latestAccel object
+        latestAccel.x = parseFloat(dataArray[1]);
+        latestAccel.y = parseFloat(dataArray[2]);
+        latestAccel.z = parseFloat(dataArray[3]);
+      } else if (identifier === 'G' && dataArray.length === 4) {
+        // It's gyroscope data, update the latestGyro object
+        latestGyro.x = parseFloat(dataArray[1]);
+        latestGyro.y = parseFloat(dataArray[2]);
+        latestGyro.z = parseFloat(dataArray[3]);
+      }
+
+      // Redraw the screen with the new data
+      updateDisplay();
     }
+
+    // Initial call to draw the display with default values
+    updateDisplay();
   </script>
 </body>
 </html>
