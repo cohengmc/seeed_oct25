@@ -1,175 +1,52 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <title>XIAO nRF52840 Sense IMU Data</title>
-    <style>
-      body {
-        font-family: Arial, sans-serif;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        padding-top: 50px;
-        background-color: #f0f0f0;
-        color: #333;
-      }
-      #connect-button {
-        padding: 12px 24px;
-        font-size: 18px;
-        cursor: pointer;
-        border-radius: 8px;
-        border: none;
-        background-color: #007bff;
-        color: white;
-        margin-bottom: 20px;
-        transition: background-color 0.3s;
-      }
-      #connect-button:hover {
-        background-color: #0056b3;
-      }
-      .container {
-        display: flex;
-        gap: 20px;
-      }
-      .data-container {
-        margin-top: 20px;
-        border: 1px solid #ccc;
-        padding: 20px;
-        border-radius: 8px;
-        background-color: white;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-      }
-      .data-item {
-        margin-bottom: 10px;
-        font-size: 1.1em;
-      }
-      h1,
-      h2 {
-        color: #333;
-      }
-    </style>
-  </head>
-  <body>
-    <h1>XIAO nRF52840 Sense IMU Data</h1>
-    <button id="connect-button">Connect to XIAO IMU</button>
+<head>
+  <title>XIAO IMU Data</title>
+</head>
+<body>
+  <h1>XIAO IMU Data</h1>
+  <button id="connectButton">Connect to XIAO</button>
+  <div id="imuData"></div>
 
-    <div class="container">
-      <div class="data-container">
-        <h2>Accelerometer</h2>
-        <div class="data-item">
-          <strong>X:</strong> <span id="accel-x">0.00</span>
-        </div>
-        <div class="data-item">
-          <strong>Y:</strong> <span id="accel-y">0.00</span>
-        </div>
-        <div class="data-item">
-          <strong>Z:</strong> <span id="accel-z">0.00</span>
-        </div>
-      </div>
+  <script>
+    const connectButton = document.getElementById('connectButton');
+    const imuDataContainer = document.getElementById('imuData');
 
-      <div class="data-container">
-        <h2>Gyroscope</h2>
-        <div class="data-item">
-          <strong>X:</strong> <span id="gyro-x">0.00</span>
-        </div>
-        <div class="data-item">
-          <strong>Y:</strong> <span id="gyro-y">0.00</span>
-        </div>
-        <div class="data-item">
-          <strong>Z:</strong> <span id="gyro-z">0.00</span>
-        </div>
-      </div>
-    </div>
-
-    <script>
-      const connectButton = document.getElementById("connect-button");
-
-      const IMU_SERVICE_UUID = "19b10000-e8f2-537e-4f6c-d104768a1214";
-      const IMU_CHARACTERISTIC_UUID = "19b10001-e8f2-537e-4f6c-d104768a1214";
-
-      let bluetoothDevice;
-
-      connectButton.addEventListener("click", () => {
-        console.log("Requesting Bluetooth device...");
-        navigator.bluetooth
-          .requestDevice({
-            filters: [
-              {
-                services: [IMU_SERVICE_UUID],
-              },
-            ],
-          })
-          .then((device) => {
-            bluetoothDevice = device;
-            console.log("Device found:", device.name);
-            // Add a listener to handle disconnection events
-            bluetoothDevice.addEventListener(
-              "gattserverdisconnected",
-              onDisconnected
-            );
-            console.log("Connecting to GATT Server...");
-            return device.gatt.connect();
-          })
-          .then((server) => {
-            console.log("GATT Server connected. Getting primary service...");
-            return server.getPrimaryService(IMU_SERVICE_UUID);
-          })
-          .then((service) => {
-            console.log("Service found. Getting characteristic...");
-            return service.getCharacteristic(IMU_CHARACTERISTIC_UUID);
-          })
-          .then((characteristic) => {
-            console.log("Characteristic found. Starting notifications...");
-            return characteristic.startNotifications().then(() => {
-              console.log("Notifications started.");
-              characteristic.addEventListener(
-                "characteristicvaluechanged",
-                handleIMUData
-              );
-            });
-          })
-          .catch((error) => {
-            console.error("Connection failed:", error);
-            if (bluetoothDevice) {
-              console.log("Trying to disconnect gracefully...");
-              bluetoothDevice.gatt.disconnect();
-            }
-          });
+    connectButton.addEventListener('click', () => {
+      navigator.bluetooth.requestDevice({
+        filters: [{ name: 'XIAO_IMU' }],
+        optionalServices: ['19b10000-e8f2-537e-4f6c-d104768a1214']
+      })
+      .then(device => {
+        return device.gatt.connect();
+      })
+      .then(server => {
+        return server.getPrimaryService('19b10000-e8f2-537e-4f6c-d104768a1214');
+      })
+      .then(service => {
+        return service.getCharacteristic('19b10001-e8f2-537e-4f6c-d104768a1214');
+      })
+      .then(characteristic => {
+        characteristic.startNotifications();
+        characteristic.addEventListener('characteristicvaluechanged', handleCharacteristicValueChanged);
+      })
+      .catch(error => {
+        console.error(error);
       });
+    });
 
-      function onDisconnected(event) {
-        const device = event.target;
-        console.log(`Device ${device.name} disconnected.`);
-        alert(`Device ${device.name} has disconnected.`);
-      }
+    function handleCharacteristicValueChanged(event) {
+      const value = event.target.value;
+      const decoder = new TextDecoder('utf-8');
+      const imuDataString = decoder.decode(value);
+      const imuDataArray = imuDataString.split(',');
 
-      function handleIMUData(event) {
-        const value = event.target.value;
-        // Check if the packet size is correct before trying to read it
-        if (value.byteLength < 24) {
-          console.warn(`Received undersized packet: ${value.byteLength} bytes`);
-          return;
-        }
-
-        const aX = value.getFloat32(0, true);
-        const aY = value.getFloat32(4, true);
-        const aZ = value.getFloat32(8, true);
-        const gX = value.getFloat32(12, true);
-        const gY = value.getFloat32(16, true);
-        const gZ = value.getFloat32(20, true);
-
-        // Log the parsed values to the console for debugging
-        // console.log(`Accel: X=${aX.toFixed(2)}, Y=${aY.toFixed(2)}, Z=${aZ.toFixed(2)}`);
-        // console.log(`Gyro:  X=${gX.toFixed(2)}, Y=${gY.toFixed(2)}, Z=${gZ.toFixed(2)}`);
-
-        // Update the HTML elements on the page
-        document.getElementById("accel-x").textContent = aX.toFixed(2);
-        document.getElementById("accel-y").textContent = aY.toFixed(2);
-        document.getElementById("accel-z").textContent = aZ.toFixed(2);
-
-        document.getElementById("gyro-x").textContent = gX.toFixed(2);
-        document.getElementById("gyro-y").textContent = gY.toFixed(2);
-        document.getElementById("gyro-z").textContent = gZ.toFixed(2);
-      }
-    </script>
-  </body>
+      imuDataContainer.innerHTML = `
+        <p>X: ${imuDataArray[0]}</p>
+        <p>Y: ${imuDataArray[1]}</p>
+        <p>Z: ${imuDataArray[2]}</p>
+      `;
+    }
+  </script>
+</body>
 </html>
