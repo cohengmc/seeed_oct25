@@ -1,15 +1,20 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>XIAO IMU Data</title>
+  <title>XIAO IMU 3D Visualization (Z-Up)</title>
   <style>
     body { 
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      display: grid;
-      place-content: center;
+      margin: 0;
+      background-color: #111;
+      color: #fff;
       text-align: center;
-      background-color: #f0f0f0;
-      color: #333;
+    }
+    #info-container {
+      position: absolute;
+      top: 10px;
+      width: 100%;
+      z-index: 100;
     }
     #connectButton {
       font-size: 1.2em;
@@ -19,65 +24,133 @@
       background-color: #007bff;
       color: white;
       cursor: pointer;
-      margin-bottom: 20px;
     }
-    .data-container {
-      display: flex;
-      gap: 20px;
+    #canvas-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
     }
-    .data-section { 
-      background-color: white;
-      border: 1px solid #ccc; 
-      padding: 10px 20px; 
-      margin-top: 20px; 
-      border-radius: 8px; 
-      min-width: 200px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    p {
-      font-size: 1.1em;
-      margin: 10px 0;
+    #data-overlay {
+      position: absolute;
+      top: 15px;
+      left: 15px;
+      background: rgba(0, 0, 0, 0.6);
+      color: white;
+      padding: 10px;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 14px;
+      text-align: left;
+      z-index: 101;
     }
   </style>
 </head>
 <body>
-  <h1>XIAO IMU Data</h1>
-  <button id="connectButton">Connect to XIAO</button>
-  
-  <div class="data-container">
-    <div id="accelerometerData"></div>
-    <div id="gyroscopeData"></div>
+
+  <div id="info-container">
+    <h1>XIAO IMU 3D Visualization</h1>
+    <button id="connectButton">Connect to XIAO</button>
   </div>
+  
+  <div id="data-overlay">
+    <strong>Raw Data</strong><br>
+    Waiting for connection...
+  </div>
+  
+  <div id="canvas-container"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
   <script>
     const connectButton = document.getElementById('connectButton');
-    const accelContainer = document.getElementById('accelerometerData');
-    const gyroContainer = document.getElementById('gyroscopeData');
+    const dataOverlay = document.getElementById('data-overlay');
+    
+    let accel = { x: 0, y: 0, z: 0 };
+    let gyro = { x: 0, y: 0, z: 0 };
+    let rotation = { x: 0, y: 0, z: 0 };
 
-    // Objects to store the latest data for each sensor
-    let latestAccel = { x: 0, y: 0, z: 0 };
-    let latestGyro = { x: 0, y: 0, z: 0 };
+    const alpha = 0.98;
+    let lastTimestamp = 0;
 
-    // Function to update the display with the latest known data
-    function updateDisplay() {
-      accelContainer.innerHTML = `
-        <div class="data-section">
-          <h2>Accelerometer</h2>
-          <p>X: ${latestAccel.x.toFixed(2)}</p>
-          <p>Y: ${latestAccel.y.toFixed(2)}</p>
-          <p>Z: ${latestAccel.z.toFixed(2)}</p>
-        </div>
-      `;
-      gyroContainer.innerHTML = `
-        <div class="data-section">
-          <h2>Gyroscope</h2>
-          <p>X: ${latestGyro.x.toFixed(2)}</p>
-          <p>Y: ${latestGyro.y.toFixed(2)}</p>
-          <p>Z: ${latestGyro.z.toFixed(2)}</p>
-        </div>
-      `;
+    // --- THREE.JS SCENE SETUP ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111111);
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    // Position camera for a good view of the Z-up system
+    camera.position.set(4, 4, 4); 
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+    // NEW: Create a "world" container to hold everything
+    const world = new THREE.Object3D();
+    // Rotate the entire world to make the Z axis point up
+    world.rotation.x = -Math.PI / 2;
+    scene.add(world);
+
+    // Add lights TO THE WORLD
+    const ambientLight = new THREE.AmbientLight(0x404040, 3);
+    world.add(ambientLight);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
+    directionalLight.position.set(5, 5, 5);
+    world.add(directionalLight);
+
+    // The imuObject will now live and rotate inside our Z-up world
+    const imuObject = new THREE.Object3D();
+    world.add(imuObject);
+
+    // Create the visible cube model with NO initial rotation
+    const geometry = new THREE.BoxGeometry(3, 2, 0.2);
+    const material = new THREE.MeshStandardMaterial({ color: 0x007bff, metalness: 0.5, roughness: 0.5 });
+    const cube = new THREE.Mesh(geometry, material);
+    imuObject.add(cube);
+    
+    // --- AXES & LABELS ---
+    const axesHelper = new THREE.AxesHelper(3);
+    cube.add(axesHelper);
+
+    function makeTextSprite(message, opts) {
+        // ... (This function is unchanged)
+        const parameters = opts || {};
+        const fontface = parameters.fontface || 'monospace';
+        const fontsize = parameters.fontsize || 16;
+        const textColor = parameters.textColor || { r: 255, g: 255, b: 255, a: 1.0 };
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        context.font = `Bold ${fontsize}px ${fontface}`;
+        const metrics = context.measureText(message);
+        const textWidth = metrics.width;
+        context.fillStyle = `rgba(${textColor.r}, ${textColor.g}, ${textColor.b}, ${textColor.a})`;
+        context.fillText(message, 0, fontsize);
+        const texture = new THREE.Texture(canvas);
+        texture.needsUpdate = true;
+        const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
+        const sprite = new THREE.Sprite(spriteMaterial);
+        sprite.scale.set(0.1 * fontsize, 0.05 * fontsize, 1.0);
+        return sprite;
     }
 
+    const axisLength = 3.2;
+    const xLabel = makeTextSprite("X", { fontsize: 40, textColor: { r: 255, g: 70, b: 70 } });
+    xLabel.position.set(axisLength, 0, 0);
+    cube.add(xLabel);
+
+    const yLabel = makeTextSprite("Y", { fontsize: 40, textColor: { r: 70, g: 255, b: 70 } });
+    yLabel.position.set(0, axisLength, 0);
+    cube.add(yLabel);
+
+    const zLabel = makeTextSprite("Z", { fontsize: 40, textColor: { r: 70, g: 70, b: 255 } });
+    zLabel.position.set(0, 0, axisLength);
+    cube.add(zLabel);
+
+
+    // --- BLUETOOTH & SENSOR LOGIC ---
+    // ... (This section is unchanged)
     connectButton.addEventListener('click', () => {
       navigator.bluetooth.requestDevice({
         filters: [{ name: 'XIAO_IMU' }],
@@ -96,31 +169,74 @@
     });
 
     function handleCharacteristicValueChanged(event) {
-      const value = event.target.value;
-      const decoder = new TextDecoder('utf-8');
-      const dataString = decoder.decode(value);
-      const dataArray = dataString.split(',');
+        const value = event.target.value;
+        const decoder = new TextDecoder('utf-8');
+        const dataString = decoder.decode(value);
+        const dataArray = dataString.split(',');
+        const identifier = dataArray[0];
 
-      const identifier = dataArray[0];
-
-      if (identifier === 'A' && dataArray.length === 4) {
-        // It's accelerometer data, update the latestAccel object
-        latestAccel.x = parseFloat(dataArray[1]);
-        latestAccel.y = parseFloat(dataArray[2]);
-        latestAccel.z = parseFloat(dataArray[3]);
-      } else if (identifier === 'G' && dataArray.length === 4) {
-        // It's gyroscope data, update the latestGyro object
-        latestGyro.x = parseFloat(dataArray[1]);
-        latestGyro.y = parseFloat(dataArray[2]);
-        latestGyro.z = parseFloat(dataArray[3]);
-      }
-
-      // Redraw the screen with the new data
-      updateDisplay();
+        if (identifier === 'A' && dataArray.length === 4) {
+            accel.x = parseFloat(dataArray[1]);
+            accel.y = parseFloat(dataArray[2]);
+            accel.z = parseFloat(dataArray[3]);
+        } else if (identifier === 'G' && dataArray.length === 4) {
+            gyro.x = parseFloat(dataArray[1]) * (Math.PI / 180);
+            gyro.y = parseFloat(dataArray[2]) * (Math.PI / 180);
+            gyro.z = parseFloat(dataArray[3]) * (Math.PI / 180);
+        }
+        updateDataOverlay();
+    }
+    
+    function updateDataOverlay() {
+        const gyroDegX = (gyro.x * (180 / Math.PI)).toFixed(2);
+        const gyroDegY = (gyro.y * (180 / Math.PI)).toFixed(2);
+        const gyroDegZ = (gyro.z * (180 / Math.PI)).toFixed(2);
+        dataOverlay.innerHTML = `
+            <strong>Raw Data</strong><br>
+            Accel X: ${accel.x.toFixed(2)}<br>
+            Accel Y: ${accel.y.toFixed(2)}<br>
+            Accel Z: ${accel.z.toFixed(2)}<br>
+            <br>
+            Gyro X: ${gyroDegX}°/s<br>
+            Gyro Y: ${gyroDegY}°/s<br>
+            Gyro Z: ${gyroDegZ}°/s
+        `;
     }
 
-    // Initial call to draw the display with default values
-    updateDisplay();
+    // --- ANIMATION LOOP ---
+    function animate() {
+      requestAnimationFrame(animate);
+      const now = Date.now();
+      if (lastTimestamp > 0) {
+        const dt = (now - lastTimestamp) / 1000.0;
+        
+        // This complementary filter logic remains the same
+        let accelAngleX = Math.atan2(accel.y, Math.sqrt(accel.x * accel.x + accel.z * accel.z));
+        let accelAngleY = Math.atan2(-accel.x, Math.sqrt(accel.y * accel.y + accel.z * accel.z));
+        let gyroAngleX = rotation.x + gyro.x * dt;
+        let gyroAngleY = rotation.y + gyro.y * dt;
+        let gyroAngleZ = rotation.z + gyro.z * dt;
+        
+        rotation.x = alpha * gyroAngleX + (1 - alpha) * accelAngleX;
+        rotation.y = alpha * gyroAngleY + (1 - alpha) * accelAngleY;
+        rotation.z = gyroAngleZ;
+
+        // Apply the live rotation to the imuObject
+        imuObject.rotation.x = rotation.x;
+        imuObject.rotation.y = rotation.y; 
+        imuObject.rotation.z = rotation.z;
+      }
+      lastTimestamp = now;
+      renderer.render(scene, camera);
+    }
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    animate();
   </script>
 </body>
 </html>
